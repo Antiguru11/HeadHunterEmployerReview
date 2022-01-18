@@ -1,15 +1,15 @@
 import os
+import sys
 
 import pandas as pd
 from scipy.stats import entropy
 
-import utils
+from .utils import preproc_str, tokenize
 
 
-def make_features(source_df: pd.DataFrame,
-              add_data_path: str = 'data') -> pd.DataFrame:
+def make_base_features(source_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
     # read add data
-    cities_info_df = pd.read_csv(os.path.join(add_data_path, 'cities_info.csv'))
+    cities_info_df = pd.read_csv(os.path.join('data', 'cities_info.csv'))
 
     # add city info (country, type, population and geo)
     source_df = source_df.merge(cities_info_df,
@@ -19,7 +19,7 @@ def make_features(source_df: pd.DataFrame,
     # position 
     mask = source_df['position'].notna()
     source_df.loc[mask, 'position_preproc'] = (source_df[mask]['position']
-                                               .apply(utils.preproc_str))
+                                               .apply(preproc_str))
 
     # position lang
     en_mask = source_df['position_preproc'].str.contains('[a-zA-Z]+')
@@ -34,7 +34,7 @@ def make_features(source_df: pd.DataFrame,
     # position tokens count
     mask = source_df['position_preproc'].notna()
     source_df.loc[mask, 'position_tokens_count'] = (source_df[mask]['position_preproc']
-                                                    .apply(lambda x: len(utils.tokenize(x))))
+                                                    .apply(lambda x: len(tokenize(x))))
 
     # position have company name
     mask = source_df['position'].notna()
@@ -54,3 +54,16 @@ def make_features(source_df: pd.DataFrame,
 
     return source_df
 
+
+functions = {'base': make_base_features, }
+
+
+if __name__ == '__main__':
+    data_path, filename, function, = sys.argv[1:]
+
+    source_df = pd.read_csv(os.path.join(data_path, filename + '.csv'))
+    features_df = functions[function](source_df, data_path)
+
+    features_df.to_csv(os.path.join(data_path,
+                                    filename + f'_{function}_features.csv'),
+                       index=False)

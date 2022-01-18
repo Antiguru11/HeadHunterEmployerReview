@@ -1,4 +1,6 @@
+import re
 import string
+from importlib import import_module
 
 import nltk
 from nltk.corpus import stopwords
@@ -29,4 +31,19 @@ def tokenize(input_str: str) -> list[str]:
     global stop_words
     tokens = [t for t in input_str.split() if t not in stop_words]
     return tokens
+
+
+def camel2snake(name: str) -> str:
+    return re.sub(r'(?<!^)(?=[A-Z]{1}[a-z]+)', '_', name).lower()
+
+
+def get_object(cls_name: str):
+    parts = cls_name.split('.')
+
+    module_name = '.'.join(parts[:-1])
+    class_name = parts[-1]
+
+    module = import_module(module_name)
+    obj = getattr(module, class_name)
+    return obj
 

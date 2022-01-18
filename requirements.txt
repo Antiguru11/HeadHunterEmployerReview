@@ -8,3 +8,6 @@ geopandas==0.10.2
 nltk==3.6.7
 pymorphy2==0.9.1
 wordcloud==1.8.1
+scikit-learn==1.0.2
+lightgbm==3.3.2
+pyyaml==6.0

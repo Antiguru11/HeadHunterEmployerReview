@@ -1,0 +1,77 @@
+name: baseline
+
+featurize:
+  name: base
+  args: {}
+
+pipeline:
+  name: simple_ova
+  features: 
+    - salary_rating
+    - team_rating
+    - managment_rating
+    - career_rating
+    - workplace_rating
+    - rest_recovery_rating
+    - country
+    - type
+    - population
+    - latitude
+    - longitude
+    - position_lang
+    - position_tokens_count
+    - position_have_company
+    - max_rating
+    - min_rating
+    - avg_rating
+    - med_rating
+    - 1_rating_count
+    - 2_rating_count
+    - 3_rating_count
+    - 4_rating_count
+    - 5_rating_count
+    - entropy_rating
+  transformers:
+  -
+    name: encoder
+    columns: 
+    - country
+    - type
+    - position_lang
+    estimators:
+      -
+        name: ordinal
+        class: sklearn.preprocessing.OrdinalEncoder
+        args:
+          handle_unknown: use_encoded_value
+          unknown_value: .nan
+  selectors: 
+  -
+    name: dummy 
+    class: competition.estimators.DummySelector
+    args: {}
+  model:
+    class: sklearn.multioutput.MultiOutputClassifier
+    args:
+      estimator:
+        class: lightgbm.LGBMClassifier
+        args: 
+          boosting_type: gbdt
+          objective: binary
+          n_estimators: 200
+          seed: 110894
+  fit_params: {}
+  evaluation:
+    split:
+      class: sklearn.model_selection.ShuffleSplit
+      args:
+        n_splits: 2
+        test_size: 0.3
+        random_state: 110894
+    metrics:
+      -
+        name: f1
+        type: sklearn.metrics.f1_score
+        args:
+          average: samples 
+

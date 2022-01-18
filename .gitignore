@@ -130,3 +130,9 @@ dmypy.json
 
 # Data
 data/*
+
+# Artifacts
+artifacts/*
+
+# Submits
+submits/*
