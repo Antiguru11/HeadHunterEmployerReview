@@ -51,15 +51,18 @@ pipeline:
     class: competition.estimators.DummySelector
     args: {}
   model:
-    class: sklearn.multioutput.MultiOutputClassifier
+    class: competition.estimators.ClassifierChain
     args:
-      estimator:
+      base_estimator:
         class: lightgbm.LGBMClassifier
         args: 
           boosting_type: gbdt
           objective: binary
           n_estimators: 200
           seed: 110894
+      order: [0, 8, 1, 2, 3, 4, 5, 6, 7]
+      cv: 2
+      random_state: 110894
   fit_params: {}
   evaluation:
     split:

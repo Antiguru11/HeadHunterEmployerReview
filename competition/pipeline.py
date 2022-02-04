@@ -34,20 +34,40 @@ class PipelineBase(ABC):
 
     @staticmethod
     def get_args(config: dict) -> dict:
-        args = dict(config)
-        for key, value in args.items():
-            if isinstance(value, dict):
-                if (('class' in value or 'type' in value)
-                    and 'args' in value
-                    and isinstance(value['args'], dict)):
-                    args[key] = PipelineBase.get_estimator(value)
-                else:
-                    args[key] = PipelineBase.get_args(value)
-            elif isinstance(value, list):
-                args[key] = [PipelineBase.get_args(v) for v in value]
-            else: 
-                pass
-        return args
+        input = config
+
+        if isinstance(input, dict):
+            if (('class' in input or 'type' in input)
+                and 'args' in input
+                and isinstance(input['args'], dict)):
+                return PipelineBase.get_estimator(input)
+            else:
+                args = dict()
+                for k, v in input.items():
+                    args[k] = PipelineBase.get_args(v)
+                return args
+        elif isinstance(input, list):
+            args = list()
+            for v in input:
+                args.append(PipelineBase.get_args(v))
+            return args
+        else:
+            return input
+
+        # args = dict(config)
+        # for key, value in args.items():
+        #     if isinstance(value, dict):
+        #         if (('class' in value or 'type' in value)
+        #             and 'args' in value
+        #             and isinstance(value['args'], dict)):
+        #             args[key] = PipelineBase.get_estimator(value)
+        #         else:
+        #             args[key] = PipelineBase.get_args(value)
+        #     elif isinstance(value, list):
+        #         args[key] = [PipelineBase.get_args(v) for v in value]
+        #     else: 
+        #         pass
+        # return args
     
     @staticmethod
     def get_estimator(config: dict):
@@ -87,8 +107,8 @@ class PipelineBase(ABC):
         return Pipeline(steps)
 
 
-class SimpleOVAPipeline(PipelineBase):
-    name = 'simple_ova'
+class SimplePipeline(PipelineBase):
+    name = 'simple'
 
     def __init__(self) -> None:
         super().__init__()
@@ -124,10 +144,12 @@ class SimpleOVAPipeline(PipelineBase):
     def predict(self, data: pd.DataFrame, **kwargs) -> pd.DataFrame:
         X = data.loc[:, self.features]
 
-        preds = self.pipeline.predict_proba(X)
+        proba = self.pipeline.predict_proba(X)
 
-        Y_proba = pd.DataFrame(np.vstack([p[:, 1] for p in preds]).T,
-                               index=data.index, columns=list(range(0, 9)))
+        if isinstance(proba, list):
+            proba = np.vstack([p[:, 1] for p in proba]).T
+        
+        Y_proba = pd.DataFrame(proba, index=data.index, columns=list(range(0, 9)))
 
         Y_pred = (Y_proba > 0.5).astype(int)
         Y_pred['target'] = Y_pred.apply(lambda x: ','.join([str(i) 
@@ -151,7 +173,7 @@ class SimpleOVAPipeline(PipelineBase):
 
     @staticmethod
     def load(path: str):
-        obj = SimpleOVAPipeline()
+        obj = SimplePipeline()
         with open(os.path.join(path, 'pipeline.pickle'), 'rb') as file:
             obj.pipeline = pickle.load(file)
         with open(os.path.join(path, 'features.txt'), 'r') as file:
