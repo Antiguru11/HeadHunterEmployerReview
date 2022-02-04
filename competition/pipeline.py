@@ -4,6 +4,7 @@ from inspect import isclass, isfunction
 from functools import partial
 
 import pickle
+import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -122,11 +123,22 @@ class SimpleOVAPipeline(PipelineBase):
 
     def predict(self, data: pd.DataFrame, **kwargs) -> pd.DataFrame:
         X = data.loc[:, self.features]
-        Y_pred = pd.DataFrame(self.pipeline.predict(X),
-                              index=data.index, columns=range(0, 9))
-        Y_pred['review_id'] = data.loc[:, 'review_id']
-        Y_pred['target'] = Y_pred.apply(lambda x: ','.join([str(i) for i in range(0, 9) if x[i] == 1]),
+
+        preds = self.pipeline.predict_proba(X)
+
+        Y_proba = pd.DataFrame(np.vstack([p[:, 1] for p in preds]).T,
+                               index=data.index, columns=list(range(0, 9)))
+
+        Y_pred = (Y_proba > 0.5).astype(int)
+        Y_pred['target'] = Y_pred.apply(lambda x: ','.join([str(i) 
+                                                            for i in range(0, 9) 
+                                                            if x[i] == 1]),
                                         axis=1)
+        
+        mask = (Y_proba <= 0.5).all(axis=1)
+        Y_pred.loc[mask, 'target'] = Y_proba.loc[mask, :].idxmax(axis=1).astype(str)
+
+        Y_pred['review_id'] = data.loc[:, 'review_id']
         return Y_pred.loc[:, ['review_id', 'target']]
 
 
