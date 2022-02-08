@@ -1,13 +1,43 @@
 import os
 import sys
 
+import numpy as np
 import pandas as pd
 from scipy.stats import entropy
 
 from .utils import preproc_str, tokenize
 
 
-def make_base_features(source_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+def _text_featurize(source_df: pd.DataFrame, column_name: str) -> pd.DataFrame:
+    mask = source_df[column_name].notna()
+    source_df.loc[mask, f'{column_name}_preproc'] = (source_df[mask][column_name]
+                                                     .apply(preproc_str))
+
+    # lang
+    en_mask = source_df[f'{column_name}_preproc'].str.contains('[a-zA-Z]+')
+    ru_mask = source_df[f'{column_name}_preproc'].str.contains('[а-яА-Я]+')
+
+    mask = source_df[f'{column_name}_preproc'].notna()
+    source_df.loc[mask, f'{column_name}_lang'] = 'unknown'
+    source_df.loc[mask & en_mask,f'{column_name}_lang'] = 'en'
+    source_df.loc[mask & ru_mask,f'{column_name}_lang'] = 'ru'
+    source_df.loc[mask & en_mask & ru_mask,f'{column_name}_lang'] = 'en_ru'
+
+    # tokens count
+    mask = source_df[f'{column_name}_preproc'].notna()
+    source_df.loc[mask, f'{column_name}_tokens_count'] = (source_df[mask][f'{column_name}_preproc']
+                                                          .apply(lambda x: len(tokenize(x))))
+
+    # have company name flag
+    mask = source_df[column_name].notna()
+    source_df.loc[mask, f'{column_name}_have_company'] = (source_df[mask][column_name]
+                                                          .str.contains('[\*]+')
+                                                          .astype(int))
+
+    return source_df
+
+
+def make_base_features(source_df: pd.DataFrame) -> pd.DataFrame:
     # read add data
     cities_info_df = pd.read_csv(os.path.join('data', 'cities_info.csv'))
 
@@ -17,29 +47,36 @@ def make_base_features(source_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
                                 left_on='city', right_on='name')
 
     # position 
-    mask = source_df['position'].notna()
-    source_df.loc[mask, 'position_preproc'] = (source_df[mask]['position']
-                                               .apply(preproc_str))
+    source_df = _text_featurize(source_df, 'position')
+    # mask = source_df['position'].notna()
+    # source_df.loc[mask, 'position_preproc'] = (source_df[mask]['position']
+    #                                            .apply(preproc_str))
 
-    # position lang
-    en_mask = source_df['position_preproc'].str.contains('[a-zA-Z]+')
-    ru_mask = source_df['position_preproc'].str.contains('[а-яА-Я]+')
+    # # position lang
+    # en_mask = source_df['position_preproc'].str.contains('[a-zA-Z]+')
+    # ru_mask = source_df['position_preproc'].str.contains('[а-яА-Я]+')
 
-    mask = source_df['position_preproc'].notna()
-    source_df.loc[mask, 'position_lang'] = 'unknown'
-    source_df.loc[mask & en_mask,'position_lang'] = 'en'
-    source_df.loc[mask & ru_mask,'position_lang'] = 'ru'
-    source_df.loc[mask & en_mask & ru_mask,'position_lang'] = 'en_ru'
+    # mask = source_df['position_preproc'].notna()
+    # source_df.loc[mask, 'position_lang'] = 'unknown'
+    # source_df.loc[mask & en_mask,'position_lang'] = 'en'
+    # source_df.loc[mask & ru_mask,'position_lang'] = 'ru'
+    # source_df.loc[mask & en_mask & ru_mask,'position_lang'] = 'en_ru'
 
-    # position tokens count
-    mask = source_df['position_preproc'].notna()
-    source_df.loc[mask, 'position_tokens_count'] = (source_df[mask]['position_preproc']
-                                                    .apply(lambda x: len(tokenize(x))))
+    # # position tokens count
+    # mask = source_df['position_preproc'].notna()
+    # source_df.loc[mask, 'position_tokens_count'] = (source_df[mask]['position_preproc']
+    #                                                 .apply(lambda x: len(tokenize(x))))
 
-    # position have company name
-    mask = source_df['position'].notna()
-    source_df.loc[mask, 'position_have_company'] = (source_df[mask]['position']
-                                                    .str.contains('[\*]+').astype(int))
+    # # position have company name
+    # mask = source_df['position'].notna()
+    # source_df.loc[mask, 'position_have_company'] = (source_df[mask]['position']
+    #                                                 .str.contains('[\*]+').astype(int))
+
+    # positive 
+    source_df = _text_featurize(source_df, 'positive')
+
+    # negative 
+    source_df = _text_featurize(source_df, 'negative')
 
     # rating
     rating_cols = ['salary_rating', 'team_rating', 'managment_rating',
@@ -50,7 +87,12 @@ def make_base_features(source_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
     source_df['med_rating'] = source_df[rating_cols].median(axis=1)
     for val in range(1, 6):
         source_df[f'{str(val)}_rating_count'] = (source_df[rating_cols] == val).sum(axis=1)
+        source_df[f'{str(val)}_rating_frac'] = source_df[f'{str(val)}_rating_count'] / 6
     source_df['entropy_rating'] = entropy(source_df[[f'{str(v)}_rating_count' for v in range(1, 6)]] / 6, axis=1)
+
+    # other
+    source_df['positive_tokens_frac'] = (source_df['positive_tokens_count'] 
+                                         / source_df['negative_tokens_count'].replace(0, np.nan))
 
     return source_df
 
