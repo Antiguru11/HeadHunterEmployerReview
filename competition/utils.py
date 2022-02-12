@@ -1,9 +1,14 @@
 import re
 import string
+import unicodedata
 from importlib import import_module
 
 import nltk
+import pymorphy2
 from nltk.corpus import stopwords
+
+
+_ru_morph = pymorphy2.MorphAnalyzer()
 
 
 try:
@@ -24,6 +29,8 @@ def preproc_str(input_str: str) -> str:
 
     output_str = output_str.strip()
 
+    output_str = unicodedata.normalize('NFKD', output_str)
+
     return output_str
 
 
@@ -31,6 +38,11 @@ def tokenize(input_str: str) -> list[str]:
     global stop_words
     tokens = [t for t in input_str.split() if t not in stop_words]
     return tokens
+
+
+def ru_normalize(input_str: str) -> str:
+    global _ru_morph
+    return _ru_morph.parse(input_str)[0].normal_form
 
 
 def camel2snake(name: str) -> str:

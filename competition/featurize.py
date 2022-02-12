@@ -1,11 +1,12 @@
 import os
+import re
 import sys
 
 import numpy as np
 import pandas as pd
 from scipy.stats import entropy
 
-from .utils import preproc_str, tokenize
+from .utils import preproc_str, tokenize, ru_normalize
 
 
 def _text_featurize(source_df: pd.DataFrame, column_name: str) -> pd.DataFrame:
@@ -34,6 +35,22 @@ def _text_featurize(source_df: pd.DataFrame, column_name: str) -> pd.DataFrame:
                                                           .str.contains('[\*]+')
                                                           .astype(int))
 
+    # empty flag
+    source_df[f'{column_name}_empty'] = source_df[column_name].isna().astype(int)
+
+    # unique token count
+    mask = source_df[f'{column_name}_preproc'].notna()
+    source_df.loc[mask, f'{column_name}_unique_tokens_count'] = (source_df[mask][f'{column_name}_preproc']
+                                                                 .apply(lambda x: len(set([t
+                                                                                           for t in tokenize(x)
+                                                                                           if re.search('[а-яА-Я]+', t)]))))
+
+    # no alpha count
+    mask = source_df[column_name].notna()
+    source_df.loc[mask, f'{column_name}_no_alpha_count'] = (source_df[mask][column_name]
+                                                            .str.strip(' *')
+                                                            .apply(lambda x: len(x) - sum(map(str.isalpha, x))))
+
     return source_df
 
 
@@ -48,29 +65,6 @@ def make_base_features(source_df: pd.DataFrame) -> pd.DataFrame:
 
     # position 
     source_df = _text_featurize(source_df, 'position')
-    # mask = source_df['position'].notna()
-    # source_df.loc[mask, 'position_preproc'] = (source_df[mask]['position']
-    #                                            .apply(preproc_str))
-
-    # # position lang
-    # en_mask = source_df['position_preproc'].str.contains('[a-zA-Z]+')
-    # ru_mask = source_df['position_preproc'].str.contains('[а-яА-Я]+')
-
-    # mask = source_df['position_preproc'].notna()
-    # source_df.loc[mask, 'position_lang'] = 'unknown'
-    # source_df.loc[mask & en_mask,'position_lang'] = 'en'
-    # source_df.loc[mask & ru_mask,'position_lang'] = 'ru'
-    # source_df.loc[mask & en_mask & ru_mask,'position_lang'] = 'en_ru'
-
-    # # position tokens count
-    # mask = source_df['position_preproc'].notna()
-    # source_df.loc[mask, 'position_tokens_count'] = (source_df[mask]['position_preproc']
-    #                                                 .apply(lambda x: len(tokenize(x))))
-
-    # # position have company name
-    # mask = source_df['position'].notna()
-    # source_df.loc[mask, 'position_have_company'] = (source_df[mask]['position']
-    #                                                 .str.contains('[\*]+').astype(int))
 
     # positive 
     source_df = _text_featurize(source_df, 'positive')
@@ -93,6 +87,16 @@ def make_base_features(source_df: pd.DataFrame) -> pd.DataFrame:
     # other
     source_df['positive_tokens_frac'] = (source_df['positive_tokens_count'] 
                                          / source_df['negative_tokens_count'].replace(0, np.nan))
+    
+    source_df['positive_unique_tokens_frac'] = (source_df['positive_unique_tokens_count'] 
+                                                / source_df['positive_tokens_count'].replace(0, np.nan))
+    source_df['negative_unique_tokens_frac'] = (source_df['negative_unique_tokens_count'] 
+                                                / source_df['negative_tokens_count'].replace(0, np.nan))
+
+    source_df['positive_no_alpha_frac'] = (source_df['positive_no_alpha_count'] 
+                                           / source_df['positive'].str.strip(' *').str.len().replace(0, np.nan))
+    source_df['negative_no_alpha_frac'] = (source_df['negative_no_alpha_count'] 
+                                           / source_df['negative'].str.strip(' *').str.len().replace(0, np.nan))
 
     return source_df
 

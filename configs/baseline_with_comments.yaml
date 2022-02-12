@@ -21,12 +21,21 @@ pipeline:
     - position_lang
     - position_tokens_count
     - position_have_company
+    - position_empty
+    - position_unique_tokens_count
+    - position_no_alpha_count
     - positive_lang
     - positive_tokens_count
     - positive_have_company
+    - positive_empty
+    - positive_unique_tokens_count
+    - positive_no_alpha_count
     - negative_lang
     - negative_tokens_count
     - negative_have_company
+    - negative_empty
+    - negative_unique_tokens_count
+    - negative_no_alpha_count
     - max_rating
     - min_rating
     - avg_rating
@@ -43,6 +52,10 @@ pipeline:
     - 5_rating_frac
     - entropy_rating
     - positive_tokens_frac
+    - positive_unique_tokens_frac
+    - negative_unique_tokens_frac
+    - positive_no_alpha_frac
+    - negative_no_alpha_frac
   transformers:
   -
     name: encoder
