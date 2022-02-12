@@ -1,0 +1,162 @@
+name: baseline
+
+featurize:
+  name: base
+  args: {}
+
+pipeline:
+  name: binary_ova
+  features: 
+    - salary_rating
+    - team_rating
+    - managment_rating
+    - career_rating
+    - workplace_rating
+    - rest_recovery_rating
+    - country
+    - type
+    - population
+    - latitude
+    - longitude
+    - position_lang
+    - position_tokens_count
+    - position_have_company
+    - position_empty
+    - position_unique_tokens_count
+    - position_no_alpha_count
+    - positive_lang
+    - positive_tokens_count
+    - positive_have_company
+    - positive_empty
+    - positive_unique_tokens_count
+    - positive_no_alpha_count
+    - negative_lang
+    - negative_tokens_count
+    - negative_have_company
+    - negative_empty
+    - negative_unique_tokens_count
+    - negative_no_alpha_count
+    - max_rating
+    - min_rating
+    - avg_rating
+    - med_rating
+    - 1_rating_count
+    - 1_rating_frac
+    - 2_rating_count
+    - 2_rating_frac
+    - 3_rating_count
+    - 3_rating_frac
+    - 4_rating_count
+    - 4_rating_frac
+    - 5_rating_count
+    - 5_rating_frac
+    - entropy_rating
+    - positive_tokens_frac
+    - positive_unique_tokens_frac
+    - negative_unique_tokens_frac
+    - positive_no_alpha_frac
+    - negative_no_alpha_frac
+  
+  binary:
+    transformers:
+    -
+      name: encoder
+      columns: 
+      - country
+      - type
+      - position_lang
+      - positive_lang
+      - negative_lang
+      estimators:
+        -
+          name: ordinal
+          class: sklearn.preprocessing.OrdinalEncoder
+          args:
+            handle_unknown: use_encoded_value
+            unknown_value: .nan
+    selectors: 
+    -
+      name: dummy 
+      class: competition.estimators.DummySelector
+      args: {}
+    model:
+      class: lightgbm.LGBMClassifier
+      args: 
+        boosting_type: gbdt
+        objective: binary
+        seed: 110894      
+    fit_params: {}
+    evaluation:
+      split:
+        class: sklearn.model_selection.ShuffleSplit
+        args:
+          n_splits: 2
+          test_size: 0.3
+          random_state: 110894
+      metrics:
+        -
+          name: f1
+          type: sklearn.metrics.f1_score
+          args:
+            average: binary 
+  
+  ova:
+    transformers:
+    -
+      name: encoder
+      columns: 
+      - country
+      - type
+      - position_lang
+      - positive_lang
+      - negative_lang
+      estimators:
+        -
+          name: ordinal
+          class: sklearn.preprocessing.OrdinalEncoder
+          args:
+            handle_unknown: use_encoded_value
+            unknown_value: .nan
+    selectors: 
+    -
+      name: dummy 
+      class: competition.estimators.DummySelector
+      args: {}
+    model:
+      class: sklearn.multioutput.MultiOutputClassifier
+      args:
+        estimator:
+          class: lightgbm.LGBMClassifier
+          args: 
+            boosting_type: gbdt
+            objective: binary
+            seed: 110894
+    fit_params: {}
+    evaluation:
+      split:
+        class: sklearn.model_selection.ShuffleSplit
+        args:
+          n_splits: 2
+          test_size: 0.3
+          random_state: 110894
+      metrics:
+        -
+          name: f1
+          type: sklearn.metrics.f1_score
+          args:
+            average: samples 
+  
+  evaluation:
+    split:
+      class: sklearn.model_selection.ShuffleSplit
+      args:
+        n_splits: 2
+        test_size: 0.3
+        random_state: 110894
+    metrics:
+      -
+        name: f1
+        type: sklearn.metrics.f1_score
+        args:
+          average: samples 
+
