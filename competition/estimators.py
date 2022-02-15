@@ -6,12 +6,14 @@ import scipy.sparse as sp
 from sklearn.base import (BaseEstimator,
                           clone,
                           MetaEstimatorMixin, 
-                          ClassifierMixin, )
+                          ClassifierMixin,
+                          TransformerMixin, )
 from sklearn.utils import check_random_state
 from sklearn.utils.validation import check_is_fitted
 from sklearn.utils.metaestimators import available_if
 from sklearn.model_selection import cross_val_predict
 from sklearn.feature_selection import SelectorMixin
+from sklearn.feature_extraction.text import TfidfVectorizer as _TfidfVectorizer
 
 
 def _available_if_base_estimator_has(attr):
@@ -323,3 +325,23 @@ class ClassifierChain(MetaEstimatorMixin, ClassifierMixin, _BaseChain):
 
     def _more_tags(self):
         return {"_skip_test": True, "multioutput_only": True}
+
+
+class TfidfTransformer(_TfidfVectorizer):
+    def fit(self, raw_documents, y=None):
+        if isinstance(raw_documents, pd.DataFrame):
+            return super().fit(raw_documents.iloc[:, 0], y)
+        else:
+            return super().fit(raw_documents, y)
+
+    def fit_transform(self, raw_documents, y=None):
+        if isinstance(raw_documents, pd.DataFrame):
+            return super().fit_transform(raw_documents.iloc[:, 0], y)
+        else:
+            return super().fit_transform(raw_documents, y)
+
+    def transform(self, raw_documents):
+        if isinstance(raw_documents, pd.DataFrame):
+            return super().transform(raw_documents.iloc[:, 0])
+        else:
+            return super().transform(raw_documents)

@@ -12,11 +12,15 @@ _ru_morph = pymorphy2.MorphAnalyzer()
 
 
 try:
-    stop_words = set(stopwords.words('russian')).union(set(stopwords.words('english')))
+    ru_stop_words = stopwords.words('russian')
+    en_stop_words = stopwords.words('english')
+    stop_words = set(ru_stop_words).union(set(en_stop_words))
 except LookupError:
     if not nltk.download('stopwords'):
         raise RuntimeError("Couldn't load stopwords from nltk_data")
-    stop_words = set(stopwords.words('russian')).union(set(stopwords.words('english')))
+    ru_stop_words = stopwords.words('russian')
+    en_stop_words = stopwords.words('english')
+    stop_words = set(ru_stop_words).union(set(en_stop_words))
 
 
 def preproc_str(input_str: str) -> str:
@@ -32,6 +36,10 @@ def preproc_str(input_str: str) -> str:
     output_str = unicodedata.normalize('NFKD', output_str)
 
     return output_str
+
+
+def tfidf_preprocess_str(input_str: str) -> str:
+    return re.sub('[^а-яА-Я ]+', '', preproc_str(input_str))
 
 
 def tokenize(input_str: str) -> list[str]:

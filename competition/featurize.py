@@ -98,6 +98,9 @@ def make_base_features(source_df: pd.DataFrame) -> pd.DataFrame:
     source_df['negative_no_alpha_frac'] = (source_df['negative_no_alpha_count'] 
                                            / source_df['negative'].str.strip(' *').str.len().replace(0, np.nan))
 
+    source_df.loc[:, 'positive_negative'] = (source_df['positive'].fillna('') 
+                                             + ' ' +  source_df['negative'].fillna(''))
+
     return source_df
 
 

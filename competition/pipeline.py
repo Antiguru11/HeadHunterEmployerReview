@@ -6,14 +6,22 @@ from functools import partial
 import pickle
 import numpy as np
 import pandas as pd
-from sklearn.compose import ColumnTransformer
+from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer
 
 from .utils import get_object
 
 
+def _dummy_transform(input):
+    return input
+
+
 class PipelineBase(ABC):
     name = None
+
+    def __init__(self, verbose: bool) -> None:
+        self.verbose = verbose
 
     @abstractmethod
     def fit(self, data: pd.DataFrame, config: dict) -> dict:
@@ -32,86 +40,74 @@ class PipelineBase(ABC):
     def load(path: str):
         pass
 
-    @staticmethod
-    def get_args(config: dict) -> dict:
+    def get_args(self, config: dict) -> dict:
         input = config
 
         if isinstance(input, dict):
             if (('class' in input or 'type' in input)
                 and 'args' in input
                 and isinstance(input['args'], dict)):
-                return PipelineBase.get_estimator(input)
+                return self.get_estimator(input)
             else:
                 args = dict()
                 for k, v in input.items():
-                    args[k] = PipelineBase.get_args(v)
+                    args[k] = self.get_args(v)
                 return args
         elif isinstance(input, list):
             args = list()
             for v in input:
-                args.append(PipelineBase.get_args(v))
+                args.append(self.get_args(v))
             return args
         else:
             return input
-
-        # args = dict(config)
-        # for key, value in args.items():
-        #     if isinstance(value, dict):
-        #         if (('class' in value or 'type' in value)
-        #             and 'args' in value
-        #             and isinstance(value['args'], dict)):
-        #             args[key] = PipelineBase.get_estimator(value)
-        #         else:
-        #             args[key] = PipelineBase.get_args(value)
-        #     elif isinstance(value, list):
-        #         args[key] = [PipelineBase.get_args(v) for v in value]
-        #     else: 
-        #         pass
-        # return args
     
-    @staticmethod
-    def get_estimator(config: dict):
+    def get_estimator(self, config: dict):
         type_name = 'class' if 'class' in config else 'type'
 
         obj = get_object(config[type_name])
-        args = PipelineBase.get_args(config.get('args', {}))
+        args = self.get_args(config.get('args', {}))
 
         if isclass(obj):
             return obj(**args)
         elif isfunction(obj):
-            return partial(obj, **args)
+            if config['callback']:
+                return obj(**args)
+            else:
+                return partial(obj, **args)
         else:
             raise ValueError
 
-    @staticmethod
-    def get_pipeline(config: dict) -> Pipeline:
+    def get_pipeline(self, config: dict) -> Pipeline:
         steps = list()
 
         if 'transformers' in config:
             t_steps = list()
             for t_config in config['transformers']:
-                e_steps = [(e['name'], PipelineBase.get_estimator(e))
+                e_steps = [(e['name'], self.get_estimator(e))
                            for e in t_config['estimators']]
                 t_steps.append((t_config['name'], Pipeline(e_steps), t_config['columns']))
-            steps.append(('transformers', ColumnTransformer(t_steps, remainder='passthrough')))
+            t_steps.append(('filter', 
+                            FunctionTransformer(func=_dummy_transform),
+                            make_column_selector(dtype_exclude=['object', 'datetime'])))
+            steps.append(('transformers', ColumnTransformer(t_steps, remainder='drop')))
         
         if 'selectors' in config:
-            s_steps = [(e['name'], PipelineBase.get_estimator(e))
+            s_steps = [(e['name'], self.get_estimator(e))
                        for e in config['selectors']]
-            steps.append(('selectots', Pipeline(s_steps)))
+            steps.append(('selectors', Pipeline(s_steps)))
         
         if 'model' not in config:
             raise RuntimeError
-        steps.append(('model', PipelineBase.get_estimator(config['model'])))
+        steps.append(('model', self.get_estimator(config['model'])))
 
-        return Pipeline(steps)
+        return Pipeline(steps, verbose=self.verbose)
 
 
 class SimplePipeline(PipelineBase):
     name = 'simple'
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, verbose: bool) -> None:
+        super().__init__(verbose)
         self.features = None
         self.pipeline = None
 
@@ -131,7 +127,9 @@ class SimplePipeline(PipelineBase):
 
         train_idx, test_idx = next(eval_splitter.split(X, Y))
 
-        self.pipeline.fit(X.iloc[train_idx, :], Y.iloc[train_idx, :])
+        self.pipeline.fit(X.iloc[train_idx, :],
+                          Y.iloc[train_idx, :],
+                          **self.get_args(config['fit_params']))
 
         Y_pred = pd.DataFrame(self.pipeline.predict(X.iloc[test_idx, :]),
                               index=test_idx, columns=range(0, 9))
@@ -173,7 +171,7 @@ class SimplePipeline(PipelineBase):
 
     @staticmethod
     def load(path: str):
-        obj = SimplePipeline()
+        obj = SimplePipeline(verbose=False)
         with open(os.path.join(path, 'pipeline.pickle'), 'rb') as file:
             obj.pipeline = pickle.load(file)
         with open(os.path.join(path, 'features.txt'), 'r') as file:
@@ -184,8 +182,8 @@ class SimplePipeline(PipelineBase):
 class BinaryOvaPipeline(PipelineBase):
     name = 'binary_ova'
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, verbose: bool) -> None:
+        super().__init__(verbose)
         self.features = None
         self.pipeline_binary = None
         self.pipeline_ova = None
@@ -305,3 +303,6 @@ class BinaryOvaPipeline(PipelineBase):
             obj.pipeline_ova = pickle.load(file)
         return obj
 
+
+pipelines = {SimplePipeline.name: SimplePipeline,
+             BinaryOvaPipeline.name: BinaryOvaPipeline, }
