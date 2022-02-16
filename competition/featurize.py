@@ -101,6 +101,10 @@ def make_base_features(source_df: pd.DataFrame) -> pd.DataFrame:
     source_df.loc[:, 'positive_negative'] = (source_df['positive'].fillna('') 
                                              + ' ' +  source_df['negative'].fillna(''))
 
+    source_df.loc[:, 'have_unknown_symbol'] = (source_df['positive_negative']
+                                               .str.contains('\xa0')
+                                               .astype(int))
+
     return source_df
 
 

@@ -57,6 +57,7 @@ pipeline:
     - positive_no_alpha_frac
     - negative_no_alpha_frac
     - positive_negative
+    - have_unknown_symbol
   transformers:
   -
     name: encoder
@@ -86,8 +87,11 @@ pipeline:
             type: competition.utils.tfidf_preprocess_str
             args: {}
             callback: false 
-          analyzer: char_wb
-          ngram_range: [3, 3]
+          analyzer: word
+          tokenizer: 
+            type: competition.utils.tfidf_tokenizer
+            args: {}
+            callback: false 
       -
         name: svd
         class: sklearn.decomposition.TruncatedSVD

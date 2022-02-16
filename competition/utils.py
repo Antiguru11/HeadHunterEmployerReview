@@ -4,11 +4,13 @@ import unicodedata
 from importlib import import_module
 
 import nltk
+import pymystem3
 import pymorphy2
 from nltk.corpus import stopwords
 
 
 _ru_morph = pymorphy2.MorphAnalyzer()
+_stem = pymystem3.Mystem()
 
 
 try:
@@ -40,6 +42,12 @@ def preproc_str(input_str: str) -> str:
 
 def tfidf_preprocess_str(input_str: str) -> str:
     return re.sub('[^а-яА-Я ]+', '', preproc_str(input_str))
+
+
+def tfidf_tokenizer(input_str: str) -> str:
+    return [_stem.lemmatize(w)[0] 
+            for w in input_str.split(' ') 
+            if len(w) != 0]
 
 
 def tokenize(input_str: str) -> list[str]:
