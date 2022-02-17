@@ -1,8 +1,13 @@
 from abc import ABCMeta, abstractmethod
 
+import torch
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
+from transformers import (AutoTokenizer,
+                          AutoModelForSequenceClassification,
+                          TrainingArguments,
+                          Trainer, )
 from sklearn.base import (BaseEstimator,
                           clone,
                           MetaEstimatorMixin, 
@@ -345,3 +350,96 @@ class TfidfTransformer(_TfidfVectorizer):
             return super().transform(raw_documents.iloc[:, 0])
         else:
             return super().transform(raw_documents)
+
+
+class _FromPandasDataset(torch.utils.data.Dataset):
+    def __init__(self, X, y, preprocessor) -> None:
+        super().__init__()
+
+        self.tokens = preprocessor(X, )
+
+        if y.ndim == 1:
+            self.labels = y.tolist()
+        elif y.ndim == 2:
+            self.labels = y.apply(lambda x: x.tolist(), axis=1).tolist()
+        else:
+            RuntimeError()
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+    def __getitem__(self, idx: int) -> dict:
+        item = {key: value[idx] for key, value in self.tokens.items()}
+        item['labels'] = self.labels[idx]
+        return item
+
+
+class _MultilabelTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits = outputs.logits
+        loss_fct = torch.nn.BCEWithLogitsLoss()
+        loss = loss_fct(logits.view(-1, self.model.config.num_labels), 
+                        labels.float().view(-1, self.model.config.num_labels))
+        return (loss, outputs) if return_outputs else loss
+
+
+class PreTrainedTransformerClassifier(BaseEstimator, ClassifierMixin):
+    def __init__(self,
+                 task_type: str,
+                 pretrained_model_name_or_path: str,
+                 tokenizer_args: dict,
+                 model_args: dict,  ) -> None:
+        super().__init__()
+        self.task_type = task_type
+        self.pretrained_model_name_or_path = pretrained_model_name_or_path
+        self.tokenizer_args = tokenizer_args
+        self.model_args = model_args
+
+        self.tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_name_or_path)
+        self.model = AutoModelForSequenceClassification.from_pretrained(self.pretrained_model_name_or_path,
+                                                                        **self.model_args)
+
+    def _preprocess_input(self, X):
+        sentences = X.iloc[:, 0].tolist()
+        return self.tokenizer(sentences, **self.tokenizer_args)
+
+    def fit(self, X, y, **fit_params):
+        dataset = _FromPandasDataset(X, y, self._preprocess_input)
+
+        args = TrainingArguments(**fit_params.get('trainings_args', {}))
+
+        trainer = None
+        if self.task_type == 'binary' or self.task_type == 'multiclass':
+            raise NotImplementedError
+        elif self.task_type == 'multilabel':
+            trainer = _MultilabelTrainer(self.model,
+                                         args,
+                                         train_dataset=dataset,
+                                         eval_dataset=dataset,
+                                         **fit_params.get('trainer_args', {}), )
+        trainer.train()
+        return self
+
+    def predict(self, X, **kwargs) -> np.ndarray:
+        if self.task_type == 'binary' or self.task_type == 'multiclass': 
+            return (self.predict_proba(X, **kwargs)[:, 1] > 0.5).astype(int)
+        elif self.task_type == 'multilabel':
+            return (self.predict_proba(X, **kwargs) > 0.5).astype(int)
+        else:
+            raise RuntimeError()
+
+    def predict_proba(self, X, **kwargs) -> np.ndarray:
+        input = self._preprocess_input(X).to('cpu')
+        output = self.model.to('cpu')(**input)
+
+        logits = output[0]
+        if self.task_type == 'binary' or self.task_type == 'multiclass':
+            proba = torch.softmax(logits)
+        elif self.task_type == 'multilabel':
+            proba = torch.sigmoid(logits)
+        else:
+            raise RuntimeError()
+
+        return proba.cpu().detach().numpy()
