@@ -5,16 +5,14 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 from transformers import (AutoTokenizer,
-                          AutoModelForSequenceClassification,
-                          TrainingArguments,
-                          Trainer, )
+                          AutoModel, )
 from sklearn.base import (BaseEstimator,
                           clone,
                           MetaEstimatorMixin, 
                           ClassifierMixin,
                           TransformerMixin, )
 from sklearn.utils import check_random_state
-from sklearn.utils.validation import check_is_fitted
+from sklearn.utils.validation import check_is_fitted, check_X_y
 from sklearn.utils.metaestimators import available_if
 from sklearn.model_selection import cross_val_predict
 from sklearn.feature_selection import SelectorMixin
@@ -352,94 +350,142 @@ class TfidfTransformer(_TfidfVectorizer):
             return super().transform(raw_documents)
 
 
-class _FromPandasDataset(torch.utils.data.Dataset):
-    def __init__(self, X, y, preprocessor) -> None:
-        super().__init__()
-
-        self.tokens = preprocessor(X, )
-
-        if y.ndim == 1:
-            self.labels = y.tolist()
-        elif y.ndim == 2:
-            self.labels = y.apply(lambda x: x.tolist(), axis=1).tolist()
-        else:
-            RuntimeError()
-
-    def __len__(self) -> int:
-        return len(self.labels)
-
-    def __getitem__(self, idx: int) -> dict:
-        item = {key: value[idx] for key, value in self.tokens.items()}
-        item['labels'] = self.labels[idx]
-        return item
-
-
-class _MultilabelTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
-        labels = inputs.pop("labels")
-        outputs = model(**inputs)
-        logits = outputs.logits
-        loss_fct = torch.nn.BCEWithLogitsLoss()
-        loss = loss_fct(logits.view(-1, self.model.config.num_labels), 
-                        labels.float().view(-1, self.model.config.num_labels))
-        return (loss, outputs) if return_outputs else loss
-
-
-class PreTrainedTransformerClassifier(BaseEstimator, ClassifierMixin):
+class HfEmbeddingsTransfomer(BaseEstimator, TransformerMixin):
     def __init__(self,
-                 task_type: str,
                  pretrained_model_name_or_path: str,
-                 tokenizer_args: dict,
-                 model_args: dict,  ) -> None:
+                 max_seq_length: int,
+                 batch_size: int, ) -> None:
         super().__init__()
-        self.task_type = task_type
         self.pretrained_model_name_or_path = pretrained_model_name_or_path
-        self.tokenizer_args = tokenizer_args
-        self.model_args = model_args
+        self.max_seq_length = max_seq_length
+        self.batch_size = batch_size
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_name_or_path)
-        self.model = AutoModelForSequenceClassification.from_pretrained(self.pretrained_model_name_or_path,
-                                                                        **self.model_args)
-
-    def _preprocess_input(self, X):
-        sentences = X.iloc[:, 0].tolist()
-        return self.tokenizer(sentences, **self.tokenizer_args)
-
-    def fit(self, X, y, **fit_params):
-        dataset = _FromPandasDataset(X, y, self._preprocess_input)
-
-        args = TrainingArguments(**fit_params.get('trainings_args', {}))
-
-        trainer = None
-        if self.task_type == 'binary' or self.task_type == 'multiclass':
-            raise NotImplementedError
-        elif self.task_type == 'multilabel':
-            trainer = _MultilabelTrainer(self.model,
-                                         args,
-                                         train_dataset=dataset,
-                                         eval_dataset=dataset,
-                                         **fit_params.get('trainer_args', {}), )
-        trainer.train()
+    def fit(self, X, y=None, **fit_params):
         return self
 
-    def predict(self, X, **kwargs) -> np.ndarray:
-        if self.task_type == 'binary' or self.task_type == 'multiclass': 
-            return (self.predict_proba(X, **kwargs)[:, 1] > 0.5).astype(int)
-        elif self.task_type == 'multilabel':
-            return (self.predict_proba(X, **kwargs) > 0.5).astype(int)
+    def transform(self, X):
+        if isinstance(X, pd.DataFrame):
+            data = X.iloc[:, 0].tolist()
+        elif isinstance(X, np.ndarray):
+            if X.ndim == 1:
+                data = X.tolist()
+            elif X.ndim == 2:
+                data = X[:, 0].tolist()
+            else:
+                raise RuntimeError
         else:
-            raise RuntimeError()
+            raise RuntimeError
 
-    def predict_proba(self, X, **kwargs) -> np.ndarray:
-        input = self._preprocess_input(X).to('cpu')
-        output = self.model.to('cpu')(**input)
+        tokenizer = AutoTokenizer.from_pretrained(self.pretrained_model_name_or_path)
+        model = AutoModel.from_pretrained(self.pretrained_model_name_or_path)
+        model.cuda()
 
-        logits = output[0]
-        if self.task_type == 'binary' or self.task_type == 'multiclass':
-            proba = torch.softmax(logits)
-        elif self.task_type == 'multilabel':
-            proba = torch.sigmoid(logits)
+        i = 0
+        embeddings = list()
+        while True:
+            torch.cuda.empty_cache()
+
+            t = tokenizer(data[i*self.batch_size:(i+1)*self.batch_size], 
+                          padding=True, truncation=True, max_length=self.max_seq_length, 
+                          return_tensors='pt', )
+            with torch.no_grad():
+                model_output = model(**{k: v.to(model.device) for k, v in t.items()})
+            batch_embeddings = model_output.last_hidden_state[:, 0, :]
+            batch_embeddings = torch.nn.functional.normalize(batch_embeddings)
+            batch_embeddings = batch_embeddings.cpu().numpy()
+
+            embeddings.append(batch_embeddings)
+
+            i += 1
+            if i * self.batch_size >= len(data):
+                break
+
+        return np.vstack(embeddings)
+
+
+class SimpleDataset(torch.utils.data.Dataset):
+    def __init__(self, X: np.ndarray, y: np.ndarray):
+        super(SimpleDataset, self).__init__()
+        self.X = torch.FloatTensor(X)
+        self.y = torch.FloatTensor(y)
+
+    def __len__(self) -> int:
+        return len(self.y)
+
+    def __getitem__(self, idx) -> dict:
+        return self.X[idx], self.y[idx]
+
+
+class MultilabelMlpClassifier(torch.nn.Module,
+                              BaseEstimator,
+                              ClassifierMixin, ):
+    def __init__(self,
+                 input_size: int,
+                 n_classes: int,
+                 layers_size: list,
+                 epochs: int, 
+                 batch_size: int, 
+                 learning_rate: float,
+                 verbose_eval: int = 100, ) -> None:
+        super(MultilabelMlpClassifier, self).__init__()
+        self.input_size = input_size
+        self.n_classes = n_classes
+        self.layers_size = layers_size
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.verbose_eval = verbose_eval
+
+        if len(layers_size) == 0:
+            self.mlp = torch.nn.Sequential(torch.nn.Linear(self.input_size, self.n_classes), )
         else:
-            raise RuntimeError()
+            sizes = zip([self.input_size] + layers_size,
+                        layers_size + [self.n_classes])
+            layers = list()
+            for i, (input_dim, output_dim) in enumerate(sizes):
+                layers.append(torch.nn.Linear(input_dim, output_dim))
+                if i < len(self.layers_size):
+                    layers.append(torch.nn.ReLU())
 
-        return proba.cpu().detach().numpy()
+            self.mlp = torch.nn.Sequential(*layers)
+
+    def fit(self, X, y, **fit_params):
+        X, y = check_X_y(X, y, multi_output=True)
+
+        optimizer = torch.optim.SGD(self.parameters(),
+                                    lr=self.learning_rate, )
+        loss_fn = torch.nn.BCEWithLogitsLoss()
+
+        dataset = SimpleDataset(X, y)
+        dataloader = torch.utils.data.DataLoader(dataset,
+                                                 batch_size=self.batch_size)
+
+        size = len(dataset)
+        for t in range(self.epochs):
+            print(f"Epoch {t+1}\n-------------------------------")
+            for batch, (inputs, labels) in enumerate(dataloader):
+                pred = self.forward(inputs)
+                loss = loss_fn(pred, labels)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                if batch % self.verbose_eval == 0:
+                    loss, current = loss.item(), batch * len(inputs)
+                    print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+
+        return self
+
+    def predict(self, X) -> np.ndarray:
+        return (self.predict_proba(X) > 0.5).astype(int)
+
+    def predict_proba(self, X) -> np.ndarray:
+        with torch.no_grad():
+            logits = self.forward(torch.FloatTensor(X))
+            probas = torch.sigmoid(logits)
+            return probas.cpu().numpy()
+
+    def forward(self, input):
+        logits = self.mlp(input)
+        return logits
