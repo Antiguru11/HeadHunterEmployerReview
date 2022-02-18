@@ -109,15 +109,17 @@ class SimplePipeline(PipelineBase):
     def __init__(self, verbose: bool) -> None:
         super().__init__(verbose)
         self.features = None
+        self.targets = None
         self.pipeline = None
 
     def fit(self, data: pd.DataFrame, config: dict) -> dict:
         self.features = config['features']
+        self.targets= config['targets']
 
         X = data.loc[:, self.features]
-        Y = pd.DataFrame(index=data.index, columns=range(0, 9))
-        for i in range(0, 9):
-            Y[i] = data['target'].str.contains(str(i)).astype(int)
+        Y = pd.DataFrame(index=data.index, columns=range(len(self.targets)))
+        for i,t in enumerate(self.targets):
+            Y[i] = data['target'].str.contains(t).astype(int)
 
         eval_splitter = self.get_estimator(config['evaluation']['split'])
         eval_metrics = {m['name']: self.get_estimator(m) 
@@ -132,7 +134,7 @@ class SimplePipeline(PipelineBase):
                           **self.get_args(config['fit_params']))
 
         Y_pred = pd.DataFrame(self.pipeline.predict(X.iloc[test_idx, :]),
-                              index=test_idx, columns=range(0, 9))
+                              index=test_idx, columns=range(len(self.targets)))
             
         results = {}
         results['metric_val'] = {n: f(Y.iloc[test_idx, ], Y_pred) 
@@ -147,35 +149,46 @@ class SimplePipeline(PipelineBase):
         if isinstance(proba, list):
             proba = np.vstack([p[:, 1] for p in proba]).T
         
-        Y_proba = pd.DataFrame(proba, index=data.index, columns=list(range(0, 9)))
+        Y_proba = pd.DataFrame(proba, index=data.index, columns=range(len(self.targets)))
 
         Y_pred = (Y_proba > 0.5).astype(int)
-        Y_pred['target'] = Y_pred.apply(lambda x: ','.join([str(i) 
-                                                            for i in range(0, 9) 
+        Y_pred['target'] = Y_pred.apply(lambda x: ','.join([self.targets[i] 
+                                                            for i in range(len(self.targets)) 
                                                             if x[i] == 1]),
                                         axis=1)
         
         mask = (Y_proba <= 0.5).all(axis=1)
-        Y_pred.loc[mask, 'target'] = Y_proba.loc[mask, :].idxmax(axis=1).astype(str)
+        Y_pred.loc[mask, 'target'] = (Y_proba
+                                      .loc[mask, :]
+                                      .idxmax(axis=1)
+                                      .apply(lambda i: self.targets[i])
+                                      .astype(str))
+
+        Y_pred['target'] = Y_pred['target'].apply(lambda x: ','.join(sorted(list(set(x.split(','))))))
 
         Y_pred['review_id'] = data.loc[:, 'review_id']
         return Y_pred.loc[:, ['review_id', 'target']]
 
 
     def save(self, path: str) -> None:
-        with open(os.path.join(path, 'pipeline.pickle'), 'wb') as file:
-            pickle.dump(self.pipeline, file)
         with open(os.path.join(path, 'features.txt'), 'w') as file:
             for f in self.features:
                 file.write(f + "\n")
+        with open(os.path.join(path, 'targets.txt'), 'w') as file:
+            for f in self.targets:
+                file.write(f + "\n")
+        with open(os.path.join(path, 'pipeline.pickle'), 'wb') as file:
+            pickle.dump(self.pipeline, file)
 
     @staticmethod
     def load(path: str):
         obj = SimplePipeline(verbose=False)
-        with open(os.path.join(path, 'pipeline.pickle'), 'rb') as file:
-            obj.pipeline = pickle.load(file)
         with open(os.path.join(path, 'features.txt'), 'r') as file:
             obj.features = list(map(str.strip, file.readlines()))
+        with open(os.path.join(path, 'targets.txt'), 'r') as file:
+            obj.targets = list(map(str.strip, file.readlines()))
+        with open(os.path.join(path, 'pipeline.pickle'), 'rb') as file:
+            obj.pipeline = pickle.load(file)
         return obj
 
 
@@ -185,6 +198,7 @@ class BinaryOvaPipeline(PipelineBase):
     def __init__(self, verbose: bool) -> None:
         super().__init__(verbose)
         self.features = None
+        self.targets = None
         self.pipeline_binary = None
         self.pipeline_ova = None
 
@@ -222,11 +236,12 @@ class BinaryOvaPipeline(PipelineBase):
 
     def fit(self, data: pd.DataFrame, config: dict) -> dict:
         self.features = config['features']
+        self.targets= config['targets']
 
         X = data.loc[:, self.features]
-        Y = pd.DataFrame(index=data.index, columns=range(0, 9))
-        for i in range(0, 9):
-            Y[i] = data['target'].str.contains(str(i)).astype(int)
+        Y = pd.DataFrame(index=data.index, columns=range(len(self.targets)))
+        for i,t in enumerate(self.targets):
+            Y[i] = data['target'].str.contains(t).astype(int)
 
         eval_splitter = self.get_estimator(config['evaluation']['split'])
         eval_metrics = {m['name']: self.get_estimator(m) 
@@ -239,16 +254,14 @@ class BinaryOvaPipeline(PipelineBase):
                                                                   config['binary'], )
         binary_preds = self.pipeline_binary.predict(X.iloc[test_idx, :])
 
-        ova_train_mask = Y.iloc[train_idx, 0] == 0
-        ova_test_mask = Y.iloc[test_idx, 0] == 0
-        self.pipeline_ova, ova_results = self._fit_pipeline(X.iloc[train_idx, :][ova_train_mask],
-                                                            Y.iloc[train_idx, 1:][ova_train_mask],
+        self.pipeline_ova, ova_results = self._fit_pipeline(X.iloc[train_idx, :][Y.iloc[train_idx, 0] == 0],
+                                                            Y.iloc[train_idx, 1:][Y.iloc[train_idx, 0] == 0],
                                                             config['ova'],)
-        ova_preds = self.pipeline_ova.predict(X.iloc[test_idx, :][ova_test_mask])
+        ova_preds = self.pipeline_ova.predict(X.iloc[test_idx, :])
 
-        Y_pred = pd.DataFrame(index=test_idx, columns=range(0, 9))
-        Y_pred.loc[:, 0] = binary_preds
-        Y_pred.loc[ova_test_mask, list(range(1, 9))] = ova_preds
+        Y_pred = pd.DataFrame(index=test_idx, columns=range(len(self.targets)))
+        Y_pred.iloc[:, 0] = binary_preds
+        Y_pred.iloc[:, 1:] = ova_preds
         Y_pred.fillna(0, inplace=True)
             
         results = {}
@@ -266,18 +279,23 @@ class BinaryOvaPipeline(PipelineBase):
             proba = np.vstack([p[:, 1] for p in proba])
         proba = np.vstack([self.pipeline_binary.predict_proba(X)[:, 1], proba]).T
 
-        Y_proba = pd.DataFrame(proba, index=data.index, columns=range(0, 9))
+        Y_proba = pd.DataFrame(proba, index=data.index, columns=range(len(self.targets)))
         
         Y_pred = (Y_proba > 0.5).astype(int)
-        Y_pred['target'] = Y_pred.apply(lambda x: ','.join([str(i) 
-                                                            for i in range(0, 9) 
+        Y_pred['target'] = Y_pred.apply(lambda x: ','.join([self.targets[i] 
+                                                            for i in range(len(self.targets)) 
                                                             if x[i] == 1]),
                                         axis=1)
         
         mask = (Y_proba <= 0.5).all(axis=1)
         Y_pred.loc[mask, 'target'] = (Y_proba
                                       .loc[mask, :]
-                                      .idxmax(axis=1).astype(str))
+                                      .idxmax(axis=1)
+                                      .apply(lambda i: self.targets[i])
+                                      .astype(str))
+
+        Y_pred['target'] = Y_pred['target'].apply(lambda x: ','.join(sorted(list(set(x.split(','))))))
+        Y_pred.loc[Y_pred.iloc[:, 0] == 1, 'target'] = '0'
 
         Y_pred['review_id'] = data.loc[:, 'review_id']
         return Y_pred.loc[:, ['review_id', 'target']]
@@ -287,6 +305,9 @@ class BinaryOvaPipeline(PipelineBase):
         with open(os.path.join(path, 'features.txt'), 'w') as file:
             for f in self.features:
                 file.write(f + "\n")
+        with open(os.path.join(path, 'targets.txt'), 'w') as file:
+            for f in self.targets:
+                file.write(f + "\n")
         with open(os.path.join(path, 'pipeline_binary.pickle'), 'wb') as file:
             pickle.dump(self.pipeline_binary, file)
         with open(os.path.join(path, 'pipeline_ova.pickle'), 'wb') as file:
@@ -294,9 +315,11 @@ class BinaryOvaPipeline(PipelineBase):
 
     @staticmethod
     def load(path: str):
-        obj = BinaryOvaPipeline()
+        obj = BinaryOvaPipeline(verbose=False)
         with open(os.path.join(path, 'features.txt'), 'r') as file:
             obj.features = list(map(str.strip, file.readlines()))
+        with open(os.path.join(path, 'targets.txt'), 'r') as file:
+            obj.targets = list(map(str.strip, file.readlines()))
         with open(os.path.join(path, 'pipeline_binary.pickle'), 'rb') as file:
             obj.pipeline_binary = pickle.load(file)
         with open(os.path.join(path, 'pipeline_ova.pickle'), 'rb') as file:
