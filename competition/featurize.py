@@ -2,9 +2,11 @@ import os
 import re
 import sys
 
+import torch
 import numpy as np
 import pandas as pd
 from scipy.stats import entropy
+from transformers import AutoTokenizer, AutoModel
 
 from .utils import preproc_str, tokenize, ru_normalize
 
@@ -54,6 +56,42 @@ def _text_featurize(source_df: pd.DataFrame, column_name: str) -> pd.DataFrame:
     return source_df
 
 
+def _load_embeddings(source_df: pd.DataFrame, 
+                     pretrained_model_name_or_path: str,
+                     max_seq_length: int,
+                     batch_size: int,) -> pd.DataFrame:
+    data = (source_df['positive'].fillna('') 
+            + ' ' +  source_df['negative'].fillna('')).tolist()
+    
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+    model = AutoModel.from_pretrained(pretrained_model_name_or_path)
+    model.cuda()
+
+    i = 0
+    embeddings = list()
+    while True:
+        torch.cuda.empty_cache()
+
+        t = tokenizer(data[i*batch_size:(i+1)*batch_size], 
+                      padding=True, truncation=True, max_length=max_seq_length, 
+                      return_tensors='pt', )
+        with torch.no_grad():
+            model_output = model(**{k: v.to(model.device) for k, v in t.items()})
+        batch_embeddings = model_output.last_hidden_state[:, 0, :]
+        batch_embeddings = torch.nn.functional.normalize(batch_embeddings)
+        batch_embeddings = batch_embeddings.cpu().numpy()
+
+        embeddings.append(batch_embeddings)
+
+        i += 1
+        if i * batch_size >= len(data):
+            break
+    embeddings = np.vstack(embeddings)
+    embeddings_df = pd.DataFrame(embeddings, index=source_df.index,
+                                 columns=[f'emb_{i}' for i in range(embeddings.shape[1])])
+
+    return source_df.join(embeddings_df, how='left') 
+
 def make_base_features(source_df: pd.DataFrame) -> pd.DataFrame:
     # read add data
     cities_info_df = pd.read_csv(os.path.join('data', 'cities_info.csv'))
@@ -98,12 +136,12 @@ def make_base_features(source_df: pd.DataFrame) -> pd.DataFrame:
     source_df['negative_no_alpha_frac'] = (source_df['negative_no_alpha_count'] 
                                            / source_df['negative'].str.strip(' *').str.len().replace(0, np.nan))
 
-    source_df.loc[:, 'positive_negative'] = (source_df['positive'].fillna('') 
-                                             + ' ' +  source_df['negative'].fillna(''))
-
-    source_df.loc[:, 'have_unknown_symbol'] = (source_df['positive_negative']
+    source_df.loc[:, 'have_unknown_symbol'] = ((source_df['positive'].fillna('') 
+                                                + ' ' +  source_df['negative'].fillna(''))
                                                .str.contains('\xa0')
                                                .astype(int))
+
+    source_df = _load_embeddings(source_df, 'cointegrated/rubert-tiny', 500, 500)
 
     return source_df
 

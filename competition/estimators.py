@@ -12,7 +12,7 @@ from sklearn.base import (BaseEstimator,
                           ClassifierMixin,
                           TransformerMixin, )
 from sklearn.utils import check_random_state
-from sklearn.utils.validation import check_is_fitted, check_X_y
+from sklearn.utils.validation import check_is_fitted, check_X_y, check_array
 from sklearn.utils.metaestimators import available_if
 from sklearn.model_selection import cross_val_predict
 from sklearn.feature_selection import SelectorMixin
@@ -489,3 +489,88 @@ class MultilabelMlpClassifier(torch.nn.Module,
     def forward(self, input):
         logits = self.mlp(input)
         return logits
+
+
+class BitMaskTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self, masks: list, post_masks: dict) -> None:
+        super(BitMaskTransformer, self).__init__()
+        self.masks = masks
+        self.post_masks = post_masks
+
+    def fit(self, X, y=None, **fit_params):        
+        return self
+    
+    def transform(self, X) -> np.ndarray:
+        X = pd.DataFrame(check_array(X))
+        
+        X_encoded = X.apply(lambda x: np.bitwise_xor.reduce([int(self.masks[i], base=2) 
+                                                             for i in range(len(self.masks)) 
+                                                             if x[i] == 1]),
+                            axis=1)
+        for k,v in self.post_masks.items():
+            X_encoded[(X_encoded & int(k, base=2)) != 0] ^= int(v, base=2)
+        
+        return X_encoded.values.reshape(-1, 1)
+
+    def inverse_transform(self, X) -> np.ndarray:
+        X = pd.Series(check_array(X).reshape(-1), name='code')
+        X = X.round().astype(int)
+
+        for k,v in self.post_masks.items():
+            X[((X ^ int(v, base=2)) & int(k, base=2)) != 0] ^= int(v, base=2)
+
+        X_decoded = pd.DataFrame(X.apply(lambda x: [int((x & int(self.masks[i], base=2)) != 0) 
+                                                    for i in range(len(self.masks))]).tolist(), )
+
+        return X_decoded.values
+
+
+class MapTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self, map: dict, n_labels: int) -> None:
+        super(MapTransformer, self).__init__()
+        self.map = map
+        self.n_labels = n_labels
+
+    def _exclude_column_idx(self, idxs) -> list:
+        if isinstance(idxs, int):
+            return list(filter(lambda x: x != idxs, range(self.n_labels)))
+        elif isinstance(idxs, list):
+            return list(filter(lambda x: x not in idxs, range(self.n_labels)))
+        else:
+            raise RuntimeError
+
+    def fit(self, X, y=None, **fit_params):        
+        return self
+    
+    def transform(self, X) -> np.ndarray:
+        X = pd.DataFrame(check_array(X))
+        
+        X_encoded = pd.Series(index=X.index, name='code')
+        for k,v in self.map.items():
+            excluded_mask = (X.loc[:, self._exclude_column_idx(v)] != 1).all(axis=1)
+            if isinstance(v, int):
+                X_encoded.loc[(X.loc[:, v] == 1) & excluded_mask] = k
+            elif isinstance(v, list):
+                include_mask = X.loc[:, v[0]] == 1
+                for vi in v[1:]:
+                    include_mask &= X.loc[:, vi] == 1
+                X_encoded.loc[include_mask & excluded_mask] = k
+            else:
+                raise RuntimeError
+
+        if X_encoded.isna().any():
+            print('Warning, encoded variables contains NaNs!')
+                
+        return X_encoded.values.reshape(-1, 1)
+
+    def inverse_transform(self, X) -> np.ndarray:
+        X = pd.Series(check_array(X).reshape(-1), name='code')
+        X = X.round().astype(int)
+
+        X_decoded = pd.DataFrame(index=X.index, columns=range(self.n_labels))
+        for k,v in self.map.items():
+            X_decoded.loc[X == k, v] = 1
+        X_decoded.fillna(0, inplace=True)
+
+        return X_decoded.astype(int).values
+
